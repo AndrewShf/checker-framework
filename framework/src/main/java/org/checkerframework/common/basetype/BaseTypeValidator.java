@@ -13,6 +13,8 @@ import com.sun.source.tree.VariableTree;
 
 import org.checkerframework.checker.compilermsgs.qual.CompilerMessageKey;
 import org.checkerframework.checker.nullness.qual.Nullable;
+import org.checkerframework.framework.qual.TargetLocations;
+import org.checkerframework.framework.qual.TypeUseLocation;
 import org.checkerframework.framework.source.DiagMessage;
 import org.checkerframework.framework.type.AnnotatedTypeFactory;
 import org.checkerframework.framework.type.AnnotatedTypeMirror;
@@ -34,11 +36,7 @@ import org.checkerframework.javacutil.TreeUtils;
 import org.checkerframework.javacutil.TypeAnnotationUtils;
 import org.checkerframework.javacutil.TypesUtils;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 import javax.lang.model.element.AnnotationMirror;
 import javax.lang.model.element.TypeElement;
@@ -679,6 +677,8 @@ public class BaseTypeValidator extends AnnotatedTypeScanner<Void, Tree> implemen
             reportInvalidBounds(type, tree);
         }
 
+        checkAnnotationOnWildCard(type, tree);
+
         return super.visitWildcard(type, tree);
     }
 
@@ -704,5 +704,68 @@ public class BaseTypeValidator extends AnnotatedTypeScanner<Void, Tree> implemen
         //  a bound.type.incompatible
 
         return true;
+    }
+
+    /**
+     * Check if the annotation on wildcard is permitted by @TargetLocations. Report an error if the
+     * actual use of this annotation is not listed in the declared use of the annotation
+     * in @TargetLocation.
+     *
+     * @param type the type to check
+     * @param tree the type's tree
+     */
+    public void checkAnnotationOnWildCard(AnnotatedWildcardType type, Tree tree) {
+        // only one annotation in this collection
+        for (AnnotationMirror am : type.getSuperBound().getAnnotations()) {
+            TargetLocations tls =
+                    am.getAnnotationType().asElement().getAnnotation(TargetLocations.class);
+            // @Target({ElementType.TYPE_USE})} together with no @TargetLocations(...) means that
+            // the qualifier can be written on any type use
+            // TODO: do we have to consider the scenario that @Target contains other ElementType?
+            if (tls == null) {
+                continue;
+            }
+            TypeUseLocation[] locations = tls.value();
+
+            if ((tree.getKind() == Tree.Kind.SUPER_WILDCARD
+                            && Arrays.asList(locations)
+                                    .contains(TypeUseLocation.EXPLICIT_LOWER_BOUND))
+                    || ((tree.getKind() != Tree.Kind.SUPER_WILDCARD)
+                            && Arrays.asList(locations)
+                                    .contains(TypeUseLocation.IMPLICIT_LOWER_BOUND))) {
+                continue;
+            }
+            checker.reportError(
+                    tree,
+                    "type.invalid.annotations.in.location",
+                    type.getSuperBound().getAnnotations().toString(),
+                    tree.getKind().toString());
+            return;
+        }
+
+        // check extends bound
+        for (AnnotationMirror am : type.getExtendsBound().getAnnotations()) {
+            TargetLocations tls =
+                    am.getAnnotationType().asElement().getAnnotation(TargetLocations.class);
+            if (tls == null) {
+                continue;
+            }
+            TypeUseLocation[] locations = tls.value();
+
+            if ((tree.getKind() == Tree.Kind.EXTENDS_WILDCARD
+                            && Arrays.asList(locations)
+                                    .contains(TypeUseLocation.EXPLICIT_UPPER_BOUND))
+                    || ((tree.getKind() != Tree.Kind.EXTENDS_WILDCARD)
+                            && Arrays.asList(locations)
+                                    .contains(TypeUseLocation.IMPLICIT_UPPER_BOUND))) {
+                continue;
+            }
+            checker.reportError(
+                    tree,
+                    "type.invalid.annotations.in.location",
+                    type.getExtendsBound().getAnnotations().toString(),
+                    tree.getKind().toString());
+            return;
+        }
     }
 }
